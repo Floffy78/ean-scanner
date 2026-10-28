@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EAN-13 Scanner und GS1-128-Liste</title>
+<style>
+:root{font-family:system-ui,Arial,sans-serif;color:#18212b;background:#f3f6f8}
+body{max-width:960px;margin:auto;padding:14px}
+h1{font-size:1.4rem}.panel{background:#fff;border:1px solid #d8e0e7;border-radius:12px;padding:14px;margin:12px 0}
+button,input{font:inherit;padding:10px;border-radius:8px;border:1px solid #b7c2cc}
+button{background:#174a78;color:white;border:0;margin:4px 4px 4px 0}
+button.secondary{background:#e7edf2;color:#17212b}
+input[type=number]{width:90px}input[type=text]{max-width:100%;width:240px}
+video{width:100%;max-height:330px;background:#111;border-radius:8px;margin-top:8px}
+#status{white-space:pre-wrap}.small{font-size:.9rem;color:#52616b}
+table{width:100%;border-collapse:collapse}th,td{padding:8px;border-bottom:1px solid #e1e6ea;text-align:left;vertical-align:top}
+.wrap{overflow-x:auto}.barcode{max-width:100%;height:auto}
+@media print{button,.no-print,video{display:none!important}body{background:#fff}.panel{border:0}}
+</style>
+</head>
+<body>
+<h1>EAN-13 scannen → GS1-128-Liste</h1>
+<div class="panel">
+  <label for="qty"><b>Menge für den nächsten Scan</b></label><br><br>
+  <input id="qty" type="number" min="1" step="1" value="1">
+  <button id="scan">Scannen</button>
+  <button id="stop" class="secondary">Kamera stoppen</button>
+  <p id="status">Tippe auf „Scannen“, um die Kamera zu aktivieren.</p>
+  <video id="video" muted playsinline></video>
+  <p class="small">Hinweis: Diese Version lädt beim ersten Öffnen den Scanner und den Barcode-Generator aus dem Internet. Danach kann der Browser sie eventuell zwischenspeichern, aber Offline-Betrieb ist nicht garantiert. Für Kamerazugriff muss die Seite in einem unterstützten Browserkontext geöffnet werden; die Vorschau der Dateien-App kann die Kamera blockieren.</p>
+</div>
+<div class="panel">
+  <b>EAN-13 manuell hinzufügen</b><br><br>
+  <input id="ean" type="text" inputmode="numeric" maxlength="13" placeholder="13-stellige EAN-13">
+  <input id="manualQty" type="number" min="1" step="1" value="1" aria-label="Menge">
+  <button id="add">Hinzufügen</button>
+</div>
+<div class="panel">
+  <button id="csv" class="no-print">CSV exportieren</button>
+  <button id="print" class="secondary no-print">Drucken / PDF</button>
+  <button id="clear" class="secondary no-print">Liste leeren</button>
+  <div class="wrap">
+    <table>
+      <thead><tr><th>Menge</th><th>EAN-13</th><th>GS1-128 (AI 01 + GTIN-14)</th><th class="no-print">Aktion</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/umd/index.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bwip-js@4.5.1/dist/bwip-js-min.js"></script>
+<script>
+(() => {
+ const $=id=>document.getElementById(id), tbody=$('rows');
+ let entries=[], controls=null, lastCode='', lastAt=0;
+ function validEAN(s){
+   if(!/^\d{13}$/.test(s))return false;
+   const sum=[...s.slice(0,12)].reduce((a,d,i)=>a+Number(d)*(i%2===0?1:3),0);
+   return (10-sum%10)%10===Number(s[12]);
+ }
+ function render(){
+   tbody.replaceChildren();
+   entries.forEach((e,i)=>{
+     const tr=document.createElement('tr'),qtd=document.createElement('td'),qi=document.createElement('input');
+     qi.type='number';qi.min='1';qi.step='1';qi.value=e.qty;qi.style.width='70px';
+     qi.onchange=()=>e.qty=Math.max(1,parseInt(qi.value||'1',10));qtd.append(qi);
+     const ec=document.createElement('td');ec.textContent=e.ean;
+     const bc=document.createElement('td'),human=document.createElement('div'),canvas=document.createElement('canvas');
+     human.textContent='(01)0'+e.ean;human.className='small';canvas.className='barcode';bc.append(human,canvas);
+     try{bwipjs.toCanvas(canvas,{bcid:'gs1-128',text:'(01)0'+e.ean,scale:2,height:14,includetext:true,textxalign:'center'});}
+     catch(err){bc.append(document.createTextNode('Barcode-Generator nicht geladen.'));}
+     const ac=document.createElement('td'),del=document.createElement('button');del.className='secondary no-print';del.textContent='Entfernen';del.onclick=()=>{entries.splice(i,1);render();};ac.append(del);
+     tr.append(qtd,ec,bc,ac);tbody.append(tr);
+   });
+ }
+ function addEAN(s,q){
+   s=String(s).trim();
+   if(!validEAN(s)){$('status').textContent='Ungültige EAN-13 oder Prüfziffer. Bitte erneut scannen/eingeben.';return;}
+   const found=entries.find(x=>x.ean===s);
+   if(found)found.qty+=Math.max(1,q||1);else entries.push({qty:Math.max(1,q||1),ean:s});
+   $('status').textContent='Hinzugefügt: '+s;render();
+ }
+ $('scan').onclick=async()=>{
+   $('status').textContent='Prüfe Kamera und Scanner …';
+   if(!navigator.mediaDevices?.getUserMedia){$('status').textContent='Kamerazugriff in diesem Öffnungsweg nicht verfügbar. Öffne die Seite in Chrome über HTTPS, nicht in der Dateien-App-Vorschau.';return;}
+   if(!window.ZXingBrowser?.BrowserMultiFormatReader){$('status').textContent='Scanner-Bibliothek nicht geladen. Prüfe die Internetverbindung und lade die Seite neu.';return;}
+   try{
+     const reader=new ZXingBrowser.BrowserMultiFormatReader();
+     controls=await reader.decodeFromVideoDevice(undefined,$('video'),(result,err)=>{
+       if(result){
+         const s=result.getText(),now=Date.now();
+         if(s!==lastCode||now-lastAt>1800){
+           lastCode=s;lastAt=now;
+           if(/^\d{13}$/.test(s))addEAN(s,parseInt($('qty').value||'1',10));
+           else $('status').textContent='Gelesener Code ist keine EAN-13: '+s;
+         }
+       }
+     });
+     $('status').textContent='Kamera aktiv. Halte den EAN-13-Code ruhig vor die Rückkamera.';
+   }catch(e){$('status').textContent='Kamera konnte nicht gestartet werden: '+(e?.message||e)+'\nPrüfe die Kameraberechtigung und öffne die Seite möglichst in Chrome über HTTPS.';}
+ };
+ $('stop').onclick=()=>{try{controls?.stop();}catch(e){}controls=null;const v=$('video');if(v.srcObject){v.srcObject.getTracks().forEach(t=>t.stop());v.srcObject=null;}$('status').textContent='Kamera gestoppt.';};
+ $('add').onclick=()=>addEAN($('ean').value,parseInt($('manualQty').value||'1',10));
+ $('ean').addEventListener('keydown',e=>{if(e.key==='Enter')$('add').click();});
+ $('clear').onclick=()=>{if(confirm('Liste wirklich leeren?')){entries=[];render();}};
+ $('print').onclick=()=>window.print();
+ $('csv').onclick=()=>{
+   const data=[['Menge','EAN-13','GS1-128-Daten'],...entries.map(e=>[e.qty,e.ean,'(01)0'+e.ean])];
+   const csv=data.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(';')).join('\r\n');
+   const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8;'}),a=document.createElement('a');
+   a.href=URL.createObjectURL(blob);a.download='ean128_liste.csv';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+ };
+ render();
+})();
+</script>
+</body>
+</html>
